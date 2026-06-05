@@ -39,7 +39,7 @@ export const loader = async ({ request }) => {
       },
       shopify: {
         configured: shopifyConfigured,
-        apiVersion: "2025-10"
+        apiVersion: "2026-07"
       },
       razorpay: {
         configured: razorpayConfigured

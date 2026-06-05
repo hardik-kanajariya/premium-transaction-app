@@ -6,9 +6,12 @@ export const loader = async ({ request }) => {
   const preflightResponse = handlePreflight(request);
   if (preflightResponse) return preflightResponse;
 
-  return corsJsonResponse({
-    keyId: process.env.RAZORPAY_KEY_ID || ""
-  }, request);
+  return corsJsonResponse(
+    {
+      keyId: process.env.RAZORPAY_KEY_ID || "",
+    },
+    request,
+  );
 };
 
 export const action = async ({ request }) => {
@@ -16,31 +19,54 @@ export const action = async ({ request }) => {
   if (preflightResponse) return preflightResponse;
 
   if (request.method !== "POST") {
-    return corsJsonResponse(formatError("Method not allowed", 405), request, { status: 405 });
+    return corsJsonResponse(formatError("Method not allowed", 405), request, {
+      status: 405,
+    });
   }
 
   try {
     const body = await request.json();
     const { amount, currency, receipt } = body;
 
-    if (typeof amount === "undefined" || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-      return corsJsonResponse(formatError("Missing or invalid 'amount' field. Must be a positive number.", 400), request, { status: 400 });
+    if (
+      typeof amount === "undefined" ||
+      isNaN(parseFloat(amount)) ||
+      parseFloat(amount) <= 0
+    ) {
+      return corsJsonResponse(
+        formatError(
+          "Missing or invalid 'amount' field. Must be a positive number in rupees.",
+          400,
+        ),
+        request,
+        { status: 400 },
+      );
     }
 
-    // Convert amount to paise. If it looks like decimal rupees (e.g. < 10000), multiply by 100.
-    const amountFloat = parseFloat(amount);
-    const amountPaise = amountFloat < 10000 ? Math.round(amountFloat * 100) : Math.round(amountFloat);
+    // Amount is always expected in rupees (decimal). Convert to paise (integer).
+    const amountRupees = parseFloat(amount);
+    const amountPaise = Math.round(amountRupees * 100);
 
     // Call the isolated Razorpay service
-    const razorpayOrder = await createRazorpayOrder(amountPaise, currency || "INR", receipt);
+    const razorpayOrder = await createRazorpayOrder(
+      amountPaise,
+      currency || "INR",
+      receipt,
+    );
 
-    return corsJsonResponse({
-      success: true,
-      order: razorpayOrder
-    }, request);
-
+    return corsJsonResponse(
+      {
+        success: true,
+        order: razorpayOrder,
+      },
+      request,
+    );
   } catch (error) {
     console.error("Error in razorpay endpoint:", error);
-    return corsJsonResponse(formatError("Internal server error", 500, error.message), request, { status: 500 });
+    return corsJsonResponse(
+      formatError("Internal server error", 500, error.message),
+      request,
+      { status: 500 },
+    );
   }
 };

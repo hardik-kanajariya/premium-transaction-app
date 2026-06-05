@@ -1,43 +1,103 @@
-import { normalizeToPaise } from "./pricing.server";
+/**
+ * Vaahini Bundle Engine — Backend Pricing Calculator
+ *
+ * Implements the exact algorithm from bundle-engine-spec.md:
+ *   1. Flatten cart items into individual units
+ *   2. Sort ascending by price (cheapest first)
+ *   3. Partition: cheapest R items → remainder tier, most expensive 4×G items → group-of-4 tier
+ *   4. Calculate discounts per tier with pro-rata allocation and rounding reconciliation
+ *
+ * All internal math is done in paise (integer) to avoid floating-point drift.
+ */
 
-// Keep normalizeToPaise in the same file to keep imports clean
-export function normalizePrice(price) {
+// ─── Bundle Price Constants (paise) ───────────────────────────────────────────
+const GROUP_OF_4_PRICE_PAISE = 159900; // ₹1,599.00
+const GROUP_OF_3_PRICE_PAISE = 129900; // ₹1,299.00
+
+/**
+ * Normalizes a price input (string or number, rupees or paise) to integer paise.
+ * Assumes: values with decimals or under ₹10,000 are in rupees; otherwise already paise.
+ *
+ * @param {number|string} price — raw price value
+ * @returns {number} price in paise (integer)
+ */
+export function normalizeToPaise(price) {
   const parsed = parseFloat(price);
   if (isNaN(parsed)) return 0;
+
+  // If it's a string with a decimal point → treat as rupees
   if (typeof price === "string" && price.includes(".")) {
     return Math.round(parsed * 100);
   }
+  // If it's a float → treat as rupees
   if (typeof price === "number" && !Number.isInteger(price)) {
     return Math.round(price * 100);
   }
+  // Small integers (< 10000) → likely rupees
   if (parsed > 0 && parsed < 10000) {
     return Math.round(parsed * 100);
   }
+  // Already paise
   return Math.round(parsed);
 }
 
 /**
- * Calculates custom discount, subtotal, normalized lines, and pricing breakdown.
- * 
- * Group pricing rules:
- * - 4 items for ₹1,599 (159900 paise)
- * - 3 items for ₹1,299 (129900 paise)
- * - 2 items: Buy 1 Get 1 free (B1G1) - discount the cheaper of the two
- * - 1 item: No discount
- * 
- * Sorts all items by price ascending for optimization.
- * 
- * @param {Array<{ variantId?: string, title?: string, price: number|string, quantity: number, attributes?: any[] }>} items 
+ * Converts paise (integer) to rupees (2-decimal float).
+ * @param {number} paise
+ * @returns {number}
+ */
+function paiseToRupees(paise) {
+  return parseFloat((paise / 100).toFixed(2));
+}
+
+/**
+ * Allocates a total discount proportionally across items, with rounding reconciliation
+ * on the final item to prevent penny discrepancies (per bundle-engine-spec.md §2).
+ *
+ * @param {Array<{pricePaise: number}>} items — the flat item instances in this group
+ * @param {number} totalDiscountPaise — total discount to distribute
+ * @param {number} groupSumPaise — original price sum of all items in this group
+ */
+function allocateDiscountProRata(items, totalDiscountPaise, groupSumPaise) {
+  if (totalDiscountPaise <= 0 || groupSumPaise <= 0 || items.length === 0) return;
+
+  let allocatedSoFar = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    if (i === items.length - 1) {
+      // Final item gets the remainder to guarantee exact total
+      items[i].discountPaise = totalDiscountPaise - allocatedSoFar;
+    } else {
+      const share = items[i].pricePaise / groupSumPaise;
+      items[i].discountPaise = Math.round(totalDiscountPaise * share);
+      allocatedSoFar += items[i].discountPaise;
+    }
+  }
+}
+
+/**
+ * Calculates custom bundle discounts, per-line breakdowns, and pricing summary.
+ *
+ * @param {Array<{
+ *   variantId?: string,
+ *   title?: string,
+ *   price: number|string,
+ *   quantity: number,
+ *   attributes?: Array<{key?: string, name?: string, value: string}>
+ * }>} items — cart line items
  * @param {string} [currency="INR"]
  * @returns {{
- *   normalizedLines: Array<any>,
+ *   normalizedLines: Array<{
+ *     variantId: string|null, title: string, price: number, quantity: number,
+ *     attributes: any[], subtotal: number, discount: number, total: number
+ *   }>,
  *   subtotal: number,
  *   discountAmount: number,
  *   finalTotal: number,
  *   pricingBreakdown: {
  *     groupsOf4: { count: number, discount: number, targetPrice: number },
  *     groupsOf3: { count: number, discount: number, targetPrice: number },
- *     b1g1: { count: number, discount: number },
+ *     b1g1:      { count: number, discount: number },
  *     activeDealName: string
  *   },
  *   currency: string
@@ -47,12 +107,12 @@ export function calculatePricing(items, currency = "INR") {
   let originalSubtotalPaise = 0;
   const flatItemInstances = [];
 
-  // 1. Expand items by quantity and normalize price to paise
+  // ── Step 1: Flatten by quantity and normalize price to paise ──────────────
   items.forEach((item, itemIdx) => {
     const qty = parseInt(item.quantity, 10) || 0;
-    const pricePaise = normalizePrice(item.price);
+    const pricePaise = normalizeToPaise(item.price);
     originalSubtotalPaise += pricePaise * qty;
-    
+
     for (let i = 0; i < qty; i++) {
       flatItemInstances.push({
         flatId: `${itemIdx}-${i}`,
@@ -61,89 +121,91 @@ export function calculatePricing(items, currency = "INR") {
         title: item.title || "Custom Product",
         pricePaise,
         attributes: item.attributes || [],
-        discountPaise: 0
+        discountPaise: 0,
       });
     }
   });
 
-  // 2. Sort item instances ascending by price to give cheapest combinations first
+  // ── Step 2: Sort ascending by price (cheapest first) ─────────────────────
   flatItemInstances.sort((a, b) => a.pricePaise - b.pricePaise);
 
   const N = flatItemInstances.length;
   const G = Math.floor(N / 4);
   const R = N % 4;
 
+  // ── Step 3a: Groups of 4 — most expensive 4×G items ──────────────────────
   let groupDiscountPaise = 0;
   let groupSumPaise = 0;
 
-  // G groups of 4 (the most expensive 4 * G items)
   if (G > 0) {
     const groupStartIdx = R;
     const groupEndIdx = N - 1;
-    for (let i = groupStartIdx; i <= groupEndIdx; i++) {
-      groupSumPaise += flatItemInstances[i].pricePaise;
+    const groupItems = flatItemInstances.slice(groupStartIdx, groupEndIdx + 1);
+
+    for (const inst of groupItems) {
+      groupSumPaise += inst.pricePaise;
     }
-    const targetGroupPrice = G * 159900; // ₹1,599 in paise
+
+    const targetGroupPrice = G * GROUP_OF_4_PRICE_PAISE;
     if (groupSumPaise > targetGroupPrice) {
       groupDiscountPaise = groupSumPaise - targetGroupPrice;
-      
-      // Pro-rata allocate group discount to the flat instances in groups of 4
-      for (let i = groupStartIdx; i <= groupEndIdx; i++) {
-        const share = flatItemInstances[i].pricePaise / groupSumPaise;
-        flatItemInstances[i].discountPaise = Math.round(groupDiscountPaise * share);
-      }
+      allocateDiscountProRata(groupItems, groupDiscountPaise, groupSumPaise);
     }
   }
 
+  // ── Step 3b: Remainder — cheapest R items ────────────────────────────────
   let remDiscountPaise = 0;
   let remSumPaise = 0;
 
-  // Remainder items (the cheapest R items in the sorted list)
   if (R === 2) {
-    // Buy 1 Get 1: discount the cheaper one (index 0)
+    // B1G1: the cheaper of the two is free (index 0 after ascending sort)
     remDiscountPaise = flatItemInstances[0].pricePaise;
     flatItemInstances[0].discountPaise = remDiscountPaise;
   } else if (R === 3) {
-    const targetRemPrice = 129900; // ₹1,299 in paise
-    for (let i = 0; i < 3; i++) {
-      remSumPaise += flatItemInstances[i].pricePaise;
+    const remItems = flatItemInstances.slice(0, 3);
+    for (const inst of remItems) {
+      remSumPaise += inst.pricePaise;
     }
-    if (remSumPaise > targetRemPrice) {
-      remDiscountPaise = remSumPaise - targetRemPrice;
-      
-      // Pro-rata allocate remainder 3 discount
-      for (let i = 0; i < 3; i++) {
-        const share = flatItemInstances[i].pricePaise / remSumPaise;
-        flatItemInstances[i].discountPaise = Math.round(remDiscountPaise * share);
-      }
+    if (remSumPaise > GROUP_OF_3_PRICE_PAISE) {
+      remDiscountPaise = remSumPaise - GROUP_OF_3_PRICE_PAISE;
+      allocateDiscountProRata(remItems, remDiscountPaise, remSumPaise);
     }
   }
+  // R === 1 or R === 0: no remainder discount
 
   const totalDiscountPaise = groupDiscountPaise + remDiscountPaise;
 
-  // 3. Re-aggregate flat instances back into original lines
+  // ── Step 4: Re-aggregate flat instances back into original line items ─────
   const normalizedLines = items.map((item, originalIdx) => {
-    const instances = flatItemInstances.filter(inst => inst.originalIdx === originalIdx);
-    const lineOriginalSubtotal = instances.reduce((sum, inst) => sum + inst.pricePaise, 0);
-    const lineDiscount = instances.reduce((sum, inst) => sum + inst.discountPaise, 0);
+    const instances = flatItemInstances.filter(
+      (inst) => inst.originalIdx === originalIdx,
+    );
+    const lineOriginalSubtotal = instances.reduce(
+      (sum, inst) => sum + inst.pricePaise,
+      0,
+    );
+    const lineDiscount = instances.reduce(
+      (sum, inst) => sum + inst.discountPaise,
+      0,
+    );
     const lineTotal = lineOriginalSubtotal - lineDiscount;
 
     return {
       variantId: item.variantId || null,
       title: item.title || "Custom Product",
-      price: parseFloat((normalizePrice(item.price) / 100).toFixed(2)),
-      quantity: item.quantity,
+      price: paiseToRupees(normalizeToPaise(item.price)),
+      quantity: parseInt(item.quantity, 10) || 0,
       attributes: item.attributes || [],
-      subtotal: parseFloat((lineOriginalSubtotal / 100).toFixed(2)),
-      discount: parseFloat((lineDiscount / 100).toFixed(2)),
-      total: parseFloat((lineTotal / 100).toFixed(2))
+      subtotal: paiseToRupees(lineOriginalSubtotal),
+      discount: paiseToRupees(lineDiscount),
+      total: paiseToRupees(lineTotal),
     };
   });
 
-  // 4. Build active deal name string
+  // ── Step 5: Build human-readable deal name ────────────────────────────────
   const dealParts = [];
   if (G > 0) {
-    dealParts.push(`${G}x (4@₹1,599)`);
+    dealParts.push(`${G}x 4@₹1,599`);
   }
   if (R === 3) {
     dealParts.push("3@₹1,299");
@@ -151,32 +213,33 @@ export function calculatePricing(items, currency = "INR") {
     dealParts.push("B1G1");
   }
 
-  const activeDealName = dealParts.length > 0 
-    ? `${dealParts.join(" + ")} — Bundle Deal` 
-    : "";
+  const activeDealName =
+    dealParts.length > 0
+      ? `${dealParts.join(" + ")} — Bundle Deal`
+      : "";
 
   return {
     normalizedLines,
-    subtotal: parseFloat((originalSubtotalPaise / 100).toFixed(2)),
-    discountAmount: parseFloat((totalDiscountPaise / 100).toFixed(2)),
-    finalTotal: parseFloat(((originalSubtotalPaise - totalDiscountPaise) / 100).toFixed(2)),
+    subtotal: paiseToRupees(originalSubtotalPaise),
+    discountAmount: paiseToRupees(totalDiscountPaise),
+    finalTotal: paiseToRupees(originalSubtotalPaise - totalDiscountPaise),
     pricingBreakdown: {
       groupsOf4: {
         count: G,
-        discount: parseFloat((groupDiscountPaise / 100).toFixed(2)),
-        targetPrice: parseFloat(((G * 159900) / 100).toFixed(2))
+        discount: paiseToRupees(groupDiscountPaise),
+        targetPrice: paiseToRupees(G * GROUP_OF_4_PRICE_PAISE),
       },
       groupsOf3: {
         count: R === 3 ? 1 : 0,
-        discount: parseFloat((remDiscountPaise / 100).toFixed(2)),
-        targetPrice: R === 3 ? 1299.00 : 0.00
+        discount: paiseToRupees(remDiscountPaise),
+        targetPrice: R === 3 ? 1299.0 : 0.0,
       },
       b1g1: {
         count: R === 2 ? 1 : 0,
-        discount: R === 2 ? parseFloat((remDiscountPaise / 100).toFixed(2)) : 0.00
+        discount: R === 2 ? paiseToRupees(remDiscountPaise) : 0.0,
       },
-      activeDealName
+      activeDealName,
     },
-    currency
+    currency,
   };
 }

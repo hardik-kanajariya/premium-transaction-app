@@ -2,20 +2,20 @@ import { unauthenticated } from "../shopify.server";
 import { calculatePricing } from "./pricing.server";
 
 /**
- * Normalizes raw Shopify draft order response data.
- * @param {any} draftOrder 
- * @param {number} discountAmount 
+ * Normalizes raw Shopify draft order response data into a clean shape.
+ * @param {any} draftOrder — raw GraphQL response node
+ * @param {number} discountAmount — computed discount in rupees
  * @returns {any}
  */
 export function normalizeDraftOrderResponse(draftOrder, discountAmount) {
-  const lineItems = (draftOrder.lineItems?.edges || []).map(edge => {
+  const lineItems = (draftOrder.lineItems?.edges || []).map((edge) => {
     const node = edge.node;
     return {
       variantId: node.variant?.id || null,
       title: node.title,
       quantity: node.quantity,
       originalUnitPrice: parseFloat(node.originalUnitPrice) || 0,
-      total: (node.quantity * (parseFloat(node.originalUnitPrice) || 0))
+      total: node.quantity * (parseFloat(node.originalUnitPrice) || 0),
     };
   });
 
@@ -24,18 +24,26 @@ export function normalizeDraftOrderResponse(draftOrder, discountAmount) {
     draftOrderId: draftOrder.id,
     name: draftOrder.name,
     invoiceUrl: draftOrder.invoiceUrl,
-    checkoutUrl: draftOrder.invoiceUrl, // Falls back to invoiceUrl for payment checkout redirection
+    checkoutUrl: draftOrder.invoiceUrl,
     subtotal: parseFloat(draftOrder.subtotalPrice) || 0,
     discount: parseFloat(discountAmount.toFixed(2)),
     total: parseFloat(draftOrder.totalPrice) || 0,
     lineItemsSummary: lineItems,
-    userErrors: []
+    userErrors: [],
   };
 }
 
 /**
- * Creates a Shopify Draft Order via GraphQL mutation.
- * @param {string} shop 
+ * Creates a Shopify Draft Order via GraphQL mutation with bundle discounts applied.
+ *
+ * Flow:
+ *   1. Authenticate with Shopify using offline session
+ *   2. Run pricing calculation on the backend
+ *   3. Build GraphQL line items with originalUnitPrice
+ *   4. Attach order-level appliedDiscount with the computed bundle discount
+ *   5. Execute draftOrderCreate mutation
+ *
+ * @param {string} shop — Shopify store domain (e.g. "vaahini-dev.myshopify.com")
  * @param {{
  *   items: Array<{ variantId?: string, title?: string, price: number, quantity: number, attributes?: any[] }>,
  *   customer?: { email?: string, firstName?: string, lastName?: string },
@@ -43,26 +51,35 @@ export function normalizeDraftOrderResponse(draftOrder, discountAmount) {
  *   billingAddress?: any,
  *   note?: string,
  *   noteAttributes?: Array<{ name: string, value: string }>
- * }} params 
+ * }} params
  * @returns {Promise<any>}
  */
 export async function createShopifyDraftOrder(shop, params) {
-  const { items, customer, shippingAddress, billingAddress, note, noteAttributes } = params;
+  const {
+    items,
+    customer,
+    shippingAddress,
+    billingAddress,
+    note,
+    noteAttributes,
+  } = params;
 
-  // 1. Get authenticated Shopify admin client using scaffold's offline helper
+  // 1. Get authenticated Shopify admin client using offline session
   let admin;
   try {
     const authSession = await unauthenticated.admin(shop);
     admin = authSession.admin;
   } catch (error) {
-    throw new Error(`Failed to resolve Shopify session for shop ${shop}. Please ensure the app is installed.`);
+    throw new Error(
+      `Failed to resolve Shopify session for shop ${shop}. Please ensure the app is installed.`,
+    );
   }
 
   // 2. Run pricing calculation on the backend
   const pricing = calculatePricing(items);
 
   // 3. Build GraphQL mutation line items input
-  const lineItemsInput = items.map(item => {
+  const lineItemsInput = items.map((item) => {
     const lineItem = {
       quantity: parseInt(item.quantity, 10),
     };
@@ -80,19 +97,19 @@ export async function createShopifyDraftOrder(shop, params) {
 
     // Add line item attributes if provided
     if (item.attributes && item.attributes.length > 0) {
-      lineItem.customAttributes = item.attributes.map(attr => ({
+      lineItem.customAttributes = item.attributes.map((attr) => ({
         key: attr.key || attr.name,
-        value: String(attr.value)
+        value: String(attr.value),
       }));
     }
 
     return lineItem;
   });
 
-  // 4. Structure draft order fields
+  // 4. Structure draft order input
   const draftOrderInput = {
     lineItems: lineItemsInput,
-    note: note || "Custom discounted transaction created by App",
+    note: note || "Custom discounted transaction created by Premium Transaction App",
   };
 
   // Attach customer email
@@ -109,9 +126,9 @@ export async function createShopifyDraftOrder(shop, params) {
 
   // Attach note attributes
   if (noteAttributes && noteAttributes.length > 0) {
-    draftOrderInput.noteAttributes = noteAttributes.map(attr => ({
+    draftOrderInput.noteAttributes = noteAttributes.map((attr) => ({
       key: attr.key || attr.name,
-      value: String(attr.value)
+      value: String(attr.value),
     }));
   }
 
@@ -119,9 +136,10 @@ export async function createShopifyDraftOrder(shop, params) {
   if (pricing.discountAmount > 0) {
     draftOrderInput.appliedDiscount = {
       title: pricing.pricingBreakdown.activeDealName || "Bundle Deal",
+      description: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Custom discount"}`,
       value: pricing.discountAmount,
       valueType: "FIXED_AMOUNT",
-      amount: pricing.discountAmount
+      amount: pricing.discountAmount.toFixed(2),
     };
   }
 
@@ -158,8 +176,8 @@ export async function createShopifyDraftOrder(shop, params) {
 
   const response = await admin.graphql(mutation, {
     variables: {
-      input: draftOrderInput
-    }
+      input: draftOrderInput,
+    },
   });
 
   const responseJson = await response.json();
@@ -167,7 +185,10 @@ export async function createShopifyDraftOrder(shop, params) {
   if (responseJson.errors) {
     return {
       success: false,
-      userErrors: responseJson.errors.map(err => ({ field: ["global"], message: err.message }))
+      userErrors: responseJson.errors.map((err) => ({
+        field: ["global"],
+        message: err.message,
+      })),
     };
   }
 
@@ -176,7 +197,7 @@ export async function createShopifyDraftOrder(shop, params) {
   if (userErrors && userErrors.length > 0) {
     return {
       success: false,
-      userErrors
+      userErrors,
     };
   }
 
