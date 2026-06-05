@@ -80,6 +80,10 @@ export function validateDraftOrderInput(body) {
     return { valid: false, error: "Missing or invalid required field: 'shop' (Shopify store domain)." };
   }
 
+  if (body.currency && body.currency !== "INR") {
+    return { valid: false, error: "Only INR currency is supported." };
+  }
+
   const itemsValidation = validatePricingPreviewInput(body);
   if (!itemsValidation.valid) {
     return itemsValidation;
@@ -94,7 +98,8 @@ export function validateDraftOrderInput(body) {
       shippingAddress: body.shippingAddress && typeof body.shippingAddress === "object" ? body.shippingAddress : null,
       billingAddress: body.billingAddress && typeof body.billingAddress === "object" ? body.billingAddress : null,
       note: typeof body.note === "string" ? body.note : null,
-      noteAttributes: Array.isArray(body.noteAttributes) ? body.noteAttributes : []
+      noteAttributes: Array.isArray(body.noteAttributes) ? body.noteAttributes : [],
+      currency: "INR"
     }
   };
 }
