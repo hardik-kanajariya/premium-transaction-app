@@ -1,8 +1,8 @@
-import crypto from "crypto";
+import { createRazorpayOrder } from "../services/razorpay.server";
+import { formatError } from "../services/validation.server";
 import { corsJsonResponse, handlePreflight } from "../utils/cors";
 
 export const loader = async ({ request }) => {
-  // Handle preflight OPTIONS request
   const preflightResponse = handlePreflight(request);
   if (preflightResponse) return preflightResponse;
 
@@ -12,45 +12,35 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  // Handle preflight OPTIONS request
   const preflightResponse = handlePreflight(request);
   if (preflightResponse) return preflightResponse;
 
   if (request.method !== "POST") {
-    return corsJsonResponse({ error: "Method not allowed" }, request, { status: 405 });
+    return corsJsonResponse(formatError("Method not allowed", 405), request, { status: 405 });
   }
 
   try {
     const body = await request.json();
-    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = body;
+    const { amount, currency, receipt } = body;
 
-    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-      return corsJsonResponse({
-        error: "Missing required fields: razorpayOrderId, razorpayPaymentId, and razorpaySignature are required."
-      }, request, { status: 400 });
+    if (typeof amount === "undefined" || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      return corsJsonResponse(formatError("Missing or invalid 'amount' field. Must be a positive number.", 400), request, { status: 400 });
     }
 
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!keySecret) {
-      return corsJsonResponse({
-        error: "Razorpay secret key is not configured on the server."
-      }, request, { status: 500 });
-    }
+    // Convert amount to paise. If it looks like decimal rupees (e.g. < 10000), multiply by 100.
+    const amountFloat = parseFloat(amount);
+    const amountPaise = amountFloat < 10000 ? Math.round(amountFloat * 100) : Math.round(amountFloat);
 
-    // Verify the payment signature
-    const hmac = crypto.createHmac("sha256", keySecret);
-    hmac.update(`${razorpayOrderId}|${razorpayPaymentId}`);
-    const generatedSignature = hmac.digest("hex");
-
-    const isValid = generatedSignature === razorpaySignature;
+    // Call the isolated Razorpay service
+    const razorpayOrder = await createRazorpayOrder(amountPaise, currency || "INR", receipt);
 
     return corsJsonResponse({
-      success: isValid,
-      message: isValid ? "Signature verified successfully" : "Invalid signature verification"
-    }, request, { status: isValid ? 200 : 400 });
+      success: true,
+      order: razorpayOrder
+    }, request);
 
   } catch (error) {
-    console.error("Error verifying Razorpay signature:", error);
-    return corsJsonResponse({ error: "Internal server error", message: error.message }, request, { status: 500 });
+    console.error("Error in razorpay endpoint:", error);
+    return corsJsonResponse(formatError("Internal server error", 500, error.message), request, { status: 500 });
   }
 };

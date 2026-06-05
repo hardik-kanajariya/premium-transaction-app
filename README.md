@@ -6,6 +6,27 @@ It is designed to be hosted on Vercel and is fully compatible with the **Shopify
 
 ---
 
+## ⚠️ Important Integration Notes
+
+> [!WARNING]
+> **Razorpay Magic Checkout**: The behavior of Razorpay Magic Checkout on draft-order checkout pages is **UNVERIFIED and runtime-test-dependent**. The app provides isolated, optional Razorpay helper endpoints, but the main checkout flow does not rely on nor guarantee support for Razorpay Magic Checkout overlays on draft-order invoice links.
+>
+> **Draft Order API Conversion**: Do not assume Draft Orders can be automatically converted into normal standard Checkout API objects. The flow treats Draft Orders as their own entities, fetching the secure `invoiceUrl` directly and redirecting the customer to it.
+
+---
+
+## Guaranteed Deliverables
+
+1. **Server-Side Pricing Engine**: Complete grouping discount rules processed securely on the backend.
+2. **Draft Order Creation with Discounts**: High-fidelity line items with a custom applied order discount.
+3. **Secure Invoice/Checkout Link Generation**: Secure redirection links retrieved directly from the Draft Order API.
+4. **Pipeline Debug UI**: Side-by-side comparative table validating:
+   - *Storefront UI Expected Total*
+   - *Backend Computed Total*
+   - *Shopify Draft Order Total*
+
+---
+
 ## Architecture Overview
 
 All server-side and client-side logic is hosted in this folder. It exposes public REST APIs to the storefront theme and provides an embedded Shopify Admin dashboard for health monitoring and testing.
@@ -13,14 +34,19 @@ All server-side and client-side logic is hosted in this folder. It exposes publi
 ```
 ├── app/
 │   ├── services/
-│   │   └── pricing.server.js     # Pricing engine (bundle discount logic)
+│   │   ├── pricing.server.js     # Pricing engine (bundle discount logic)
+│   │   ├── draft-order.server.js # Shopify Draft Order API client wrapper
+│   │   ├── validation.server.js  # Request validation and error formatter
+│   │   └── razorpay.server.js    # Isolated Razorpay REST order client
 │   ├── utils/
 │   │   └── cors.js               # CORS response and preflight helper
 │   ├── routes/
-│   │   ├── api.pricing-preview.jsx # Storefront price preview API
-│   │   ├── api.draft-order.jsx   # Storefront draft order creator API
-│   │   ├── api.razorpay.jsx      # Razorpay config & verification API
-│   │   └── app._index.jsx        # Embedded admin dashboard & debug tools
+│   │   ├── api.pricing-preview.jsx  # Storefront price preview API
+│   │   ├── api.draft-order.jsx      # Storefront draft order creator API
+│   │   ├── api.draft-order-test.jsx # Test/debug comparison API
+│   │   ├── api.razorpay.jsx         # Razorpay config & order creation helper
+│   │   ├── api.health.jsx           # Diagnostics/readiness check API
+│   │   └── app._index.jsx           # Embedded admin dashboard & debug tools
 │   ├── shopify.server.js         # Shopify App config & session wrapper
 │   └── db.server.js              # Prisma Client export
 ```
@@ -76,7 +102,7 @@ All endpoints support cross-origin request sharing (CORS) and handling of prefli
 
 ### 1. Pricing Preview API
 - **Endpoint**: `POST /api/pricing-preview`
-- **Description**: Returns calculated discount details for preview on the cart page.
+- **Description**: Returns calculated discount details and line breakdowns for preview on the cart page.
 - **Request Body**:
   ```json
   {
@@ -89,13 +115,38 @@ All endpoints support cross-origin request sharing (CORS) and handling of prefli
 - **Response Body**:
   ```json
   {
-    "originalSubtotal": 229600,
-    "discount": 69700,
-    "customSubtotal": 159900,
-    "originalSubtotalDecimal": 2296.00,
-    "discountDecimal": 697.00,
-    "customSubtotalDecimal": 1599.00,
-    "activeDealName": "4@₹1,599 — Bundle Deal"
+    "normalizedLines": [
+      {
+        "variantId": "gid://shopify/ProductVariant/45678",
+        "title": "Custom Product",
+        "price": 599,
+        "quantity": 3,
+        "attributes": [],
+        "subtotal": 1797.00,
+        "discount": 515.00,
+        "total": 1282.00
+      },
+      {
+        "variantId": "gid://shopify/ProductVariant/12345",
+        "title": "Custom Product",
+        "price": 499,
+        "quantity": 1,
+        "attributes": [],
+        "subtotal": 499.00,
+        "discount": 182.00,
+        "total": 317.00
+      }
+    ],
+    "subtotal": 2296.00,
+    "discountAmount": 697.00,
+    "finalTotal": 1599.00,
+    "pricingBreakdown": {
+      "groupsOf4": { "count": 1, "discount": 697.00, "targetPrice": 1599.00 },
+      "groupsOf3": { "count": 0, "discount": 0.00, "targetPrice": 0.00 },
+      "b1g1": { "count": 0, "discount": 0.00 },
+      "activeDealName": "1x (4@₹1,599) — Bundle Deal"
+    },
+    "currency": "INR"
   }
   ```
 
@@ -120,30 +171,94 @@ All endpoints support cross-origin request sharing (CORS) and handling of prefli
   ```json
   {
     "success": true,
-    "draftOrder": {
-      "id": "gid://shopify/DraftOrder/1148924395632",
-      "name": "#D105",
+    "draftOrderId": "gid://shopify/DraftOrder/1148924395632",
+    "name": "#D105",
+    "invoiceUrl": "https://vaahini-shopify.myshopify.com/1234567/checkouts/draft_order_hash_key",
+    "checkoutUrl": "https://vaahini-shopify.myshopify.com/1234567/checkouts/draft_order_hash_key",
+    "subtotal": 2196.00,
+    "discount": 499.00,
+    "total": 1697.00,
+    "lineItemsSummary": [
+      { "variantId": "gid://shopify/ProductVariant/45678", "title": "Product A", "quantity": 2, "originalUnitPrice": 599.00, "total": 1198.00 },
+      { "variantId": "gid://shopify/ProductVariant/12345", "title": "Product B", "quantity": 2, "originalUnitPrice": 499.00, "total": 998.00 }
+    ],
+    "userErrors": []
+  }
+  ```
+
+### 3. Draft Order Test / Debug API
+- **Endpoint**: `POST /api/draft-order-test`
+- **Description**: Compares Backend pricing total vs Shopify returned draft order total side-by-side.
+- **Request Body**:
+  ```json
+  {
+    "shop": "vaahini-shopify.myshopify.com",
+    "prices": [599.00, 599.00, 499.00, 499.00],
+    "expectedUiTotal": 1599.00
+  }
+  ```
+- **Response Body**:
+  ```json
+  {
+    "success": true,
+    "shop": "vaahini-shopify.myshopify.com",
+    "comparison": {
+      "expectedUiTotal": 1599.00,
+      "backendCalculatedTotal": 1599.00,
+      "shopifyReturnedTotal": 1599.00,
+      "matchesBackendAndShopify": true,
+      "matchesUiAndBackend": true
+    },
+    "draftOrderDetails": {
+      "id": "gid://shopify/DraftOrder/11223344",
+      "name": "#D106",
       "subtotal": 2196.00,
-      "discount": 499.00,
-      "total": 1697.00,
-      "invoiceUrl": "https://vaahini-shopify.myshopify.com/1234567/checkouts/draft_order_hash_key",
-      "checkoutUrl": "https://vaahini-shopify.myshopify.com/1234567/checkouts/draft_order_hash_key"
+      "discount": 597.00,
+      "total": 1599.00,
+      "invoiceUrl": "https://..."
     }
   }
   ```
 
-### 3. Razorpay Helper API (Optional)
+### 4. Health & Diagnostics API
+- **Endpoint**: `GET /api/health`
+- **Description**: Confirms DB connection health and config parameters without leaking private credentials.
+- **Response Body**:
+  ```json
+  {
+    "status": "healthy",
+    "timestamp": "2026-06-05T12:00:00.000Z",
+    "services": {
+      "database": { "healthy": true, "error": null },
+      "shopify": { "configured": true, "apiVersion": "2025-10" },
+      "razorpay": { "configured": true }
+    }
+  }
+  ```
+
+### 5. Razorpay Helper API (Optional)
 - **Endpoint**: `GET /api/razorpay`
   - **Description**: Returns the public Razorpay Key ID.
   - **Response**: `{"keyId": "rzp_live_xxxxxxxxxx"}`
 - **Endpoint**: `POST /api/razorpay`
-  - **Description**: Verifies the signature of payments completed directly on a custom storefront.
+  - **Description**: Creates a Razorpay Order directly using REST basic auth.
   - **Request Body**:
     ```json
     {
-      "razorpayOrderId": "order_Hxz92...",
-      "razorpayPaymentId": "pay_HxzA1...",
-      "razorpaySignature": "9b64..."
+      "amount": 1599.00,
+      "currency": "INR",
+      "receipt": "rcpt_12345"
     }
     ```
-  - **Response**: `{"success": true, "message": "Signature verified successfully"}`
+  - **Response**:
+    ```json
+    {
+      "success": true,
+      "order": {
+        "id": "order_Hxz92...",
+        "amount": 1599.00,
+        "currency": "INR",
+        "receipt": "rcpt_12345"
+      }
+    }
+    ```
