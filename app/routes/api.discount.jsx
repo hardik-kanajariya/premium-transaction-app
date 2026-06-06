@@ -245,10 +245,12 @@ export const action = async ({ request }) => {
       );
     }
 
-    // Run cleanup of expired Vaahini codes asynchronously (non-blocking for fast checkouts)
-    cleanupExpiredDiscounts(shop, token).catch((err) =>
-      console.error("[Vaahini] Background cleanup error:", err)
-    );
+    // Run cleanup of expired Vaahini codes asynchronously with 10% probability to reduce Serverless API load and improve response latency
+    if (Math.random() < 0.1) {
+      cleanupExpiredDiscounts(shop, token).catch((err) =>
+        console.error("[Vaahini] Background cleanup error:", err)
+      );
+    }
 
     // 4. Create the discount code in Shopify via GraphQL directly
     const mutation = `

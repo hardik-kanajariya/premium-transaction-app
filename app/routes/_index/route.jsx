@@ -1,54 +1,47 @@
-import { redirect, Form, useLoaderData } from "react-router";
-import { login } from "../../shopify.server";
-import styles from "./styles.module.css";
-
-export const loader = async ({ request }) => {
-  const url = new URL(request.url);
-
-  if (url.searchParams.get("shop")) {
-    throw redirect(`/app?${url.searchParams.toString()}`);
-  }
-
-  return { showForm: Boolean(login) };
+export const loader = async () => {
+  return { status: "active" };
 };
 
 export default function App() {
-  const { showForm } = useLoaderData();
-
   return (
-    <div className={styles.index}>
-      <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
-        <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
-        </p>
-        {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
-            </label>
-            <button className={styles.button} type="submit">
-              Log in
-            </button>
-          </Form>
-        )}
-        <ul className={styles.list}>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-        </ul>
+    <div style={{
+      fontFamily: "system-ui, -apple-system, sans-serif",
+      padding: "3rem 2rem",
+      maxWidth: "500px",
+      margin: "4rem auto",
+      textAlign: "center",
+      backgroundColor: "#ffffff",
+      borderRadius: "12px",
+      boxShadow: "0 4px 20px rgba(0, 0, 0, 0.05)",
+      border: "1px solid #eaeaea"
+    }}>
+      <h1 style={{ color: "#1a1a1a", fontSize: "1.8rem", marginBottom: "0.5rem" }}>
+        Vaahini Custom Discount Gateway
+      </h1>
+      <p style={{ color: "#666", fontSize: "1rem", marginBottom: "2rem" }}>
+        Serverless API handler for automated checkout discounts.
+      </p>
+      <div style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "8px 16px",
+        backgroundColor: "#e6f4ea",
+        color: "#137333",
+        borderRadius: "20px",
+        fontWeight: "500",
+        fontSize: "0.9rem"
+      }}>
+        <span style={{
+          width: "8px",
+          height: "8px",
+          backgroundColor: "#137333",
+          borderRadius: "50%",
+          display: "inline-block"
+        }}></span>
+        System Online
       </div>
     </div>
   );
 }
+
