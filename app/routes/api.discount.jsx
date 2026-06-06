@@ -1,4 +1,3 @@
-import { unauthenticated } from "../shopify.server";
 import { calculatePricing } from "../services/pricing.server";
 import { validateDraftOrderInput, formatError } from "../services/validation.server";
 import { corsJsonResponse, handlePreflight } from "../utils/cors";
@@ -34,25 +33,23 @@ export const action = async ({ request }) => {
       return corsJsonResponse({ success: true, code: null, discountAmount: 0 }, request);
     }
 
-    // 2. Resolve Shopify session and client
-    let admin;
-    try {
-      const authSession = await unauthenticated.admin(shop);
-      admin = authSession.admin;
-    } catch (error) {
-      return corsJsonResponse(
-        formatError(`Failed to resolve Shopify session for shop ${shop}.`, 401),
-        request,
-        { status: 401 }
-      );
-    }
-
-    // 3. Generate a unique discount code
+    // 2. Generate a unique discount code
     const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf4.count > 0 ? "B4-" : "B1G1-"}${uniqueId}`;
 
-    // 4. Create the discount code in Shopify via GraphQL
-    const mutation = `#graphql
+    // 3. Resolve Shopify Admin API token
+    const token = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
+    if (!token) {
+      console.error("[Vaahini] SHOPIFY_ADMIN_API_ACCESS_TOKEN is not configured in .env.");
+      return corsJsonResponse(
+        formatError("Shopify API Token not configured", 500),
+        request,
+        { status: 500 }
+      );
+    }
+
+    // 4. Create the discount code in Shopify via GraphQL directly
+    const mutation = `
       mutation apiDiscountCodeCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
         discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
           codeDiscountNode {
@@ -66,32 +63,51 @@ export const action = async ({ request }) => {
       }
     `;
 
-    const response = await admin.graphql(mutation, {
-      variables: {
-        basicCodeDiscount: {
-          title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
-          code: discountCode,
-          startsAt: new Date().toISOString(),
-          endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour expiration
-          usageLimit: 1,
-          appliesOncePerCustomer: true,
-          customerSelection: {
-            all: true
-          },
-          customerGets: {
-            value: {
-              discountAmount: {
-                amount: discountAmount.toFixed(2),
-                appliesOnEachItem: false
-              }
-            },
-            items: {
+    const graphQLUrl = `https://${shop}/admin/api/2026-07/graphql.json`;
+    const response = await fetch(graphQLUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": token
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: {
+          basicCodeDiscount: {
+            title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
+            code: discountCode,
+            startsAt: new Date().toISOString(),
+            endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour expiration
+            usageLimit: 1,
+            appliesOncePerCustomer: true,
+            customerSelection: {
               all: true
+            },
+            customerGets: {
+              value: {
+                discountAmount: {
+                  amount: discountAmount.toFixed(2),
+                  appliesOnEachItem: false
+                }
+              },
+              items: {
+                all: true
+              }
             }
           }
         }
-      }
+      })
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[Vaahini] Shopify API HTTP error:", response.status, errorText);
+      return corsJsonResponse(
+        formatError(`Shopify API responded with status ${response.status}`, 400),
+        request,
+        { status: 400 }
+      );
+    }
 
     const responseJson = await response.json();
 

@@ -1,67 +1,16 @@
 import { useLoaderData } from "react-router";
-import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
 
-export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
-
-  let dbHealthy = false;
-  let offlineSessionsCount = 0;
-  const shop = session.shop;
-
-  try {
-    offlineSessionsCount = await prisma.session.count();
-    dbHealthy = true;
-  } catch (err) {
-    console.error("Database diagnostic failed:", err);
-  }
-
-  // Fetch recent draft orders for audit trail
-  let recentDraftOrders = [];
-  try {
-    const draftOrdersResponse = await admin.graphql(`#graphql
-      query {
-        draftOrders(first: 10, reverse: true, query: "status:open") {
-          edges {
-            node {
-              id
-              name
-              createdAt
-              subtotalPrice
-              totalPrice
-              invoiceUrl
-              status
-            }
-          }
-        }
-      }
-    `);
-    const draftOrdersJson = await draftOrdersResponse.json();
-    recentDraftOrders = (draftOrdersJson.data?.draftOrders?.edges || []).map(
-      (e) => ({
-        id: e.node.id,
-        name: e.node.name,
-        createdAt: e.node.createdAt,
-        subtotal: parseFloat(e.node.subtotalPrice) || 0,
-        total: parseFloat(e.node.totalPrice) || 0,
-        invoiceUrl: e.node.invoiceUrl,
-        status: e.node.status,
-      }),
-    );
-  } catch (err) {
-    console.error("Failed to fetch recent draft orders:", err);
-  }
+export const loader = async () => {
+  const tokenConfigured = !!process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
+  const appUrl = process.env.SHOPIFY_APP_URL || "Not configured";
 
   return {
-    shop,
-    dbHealthy,
-    offlineSessionsCount,
-    recentDraftOrders,
+    tokenConfigured,
+    appUrl,
   };
 };
 
-export const action = async ({ request }) => {
-  await authenticate.admin(request);
+export const action = async () => {
   return null;
 };
 
@@ -73,11 +22,12 @@ const styles = {
   },
   statusGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: "12px",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: "16px",
+    marginTop: "16px",
   },
   statusCard: {
-    padding: "16px",
+    padding: "20px",
     borderRadius: "10px",
     border: "1px solid #e5e7eb",
     background: "#f9fafb",
@@ -91,40 +41,9 @@ const styles = {
     marginBottom: "6px",
   },
   statusValue: {
-    fontSize: "14px",
+    fontSize: "15px",
     fontWeight: "600",
     color: "#111827",
-  },
-  sectionCard: {
-    padding: "20px",
-    borderRadius: "12px",
-    border: "1px solid #e5e7eb",
-    background: "#ffffff",
-    marginBottom: "16px",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "13px",
-  },
-  th: {
-    padding: "8px 12px",
-    textAlign: "left",
-    fontWeight: "600",
-    color: "#374151",
-    borderBottom: "2px solid #e5e7eb",
-    fontSize: "12px",
-  },
-  td: {
-    padding: "8px 12px",
-    borderBottom: "1px solid #f3f4f6",
-    color: "#374151",
-  },
-  tdRight: {
-    padding: "8px 12px",
-    borderBottom: "1px solid #f3f4f6",
-    color: "#374151",
-    textAlign: "right",
   },
   badge: {
     display: "inline-block",
@@ -151,144 +70,76 @@ const styles = {
     color: "#92400e",
     border: "1px solid #fbbf24",
   },
-  linkButton: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    padding: "6px 14px",
-    borderRadius: "8px",
-    fontSize: "12px",
-    fontWeight: "600",
-    color: "#ffffff",
-    background: "#2563eb",
-    border: "none",
-    cursor: "pointer",
-    textDecoration: "none",
+  infoPanel: {
+    padding: "20px",
+    borderRadius: "12px",
+    border: "1px solid #e5e7eb",
+    background: "#ffffff",
+    marginTop: "20px",
+    lineHeight: "1.6",
   },
+  paragraph: {
+    fontSize: "13px",
+    color: "#4b5563",
+    margin: "8px 0 0 0",
+  }
 };
 
 export default function Dashboard() {
-  const { shop, dbHealthy, offlineSessionsCount, recentDraftOrders } =
-    useLoaderData();
+  const { tokenConfigured, appUrl } = useLoaderData();
 
   return (
-    <s-page heading="Premium Transaction Dashboard" style={styles.page}>
-      {/* ──── 1. System Status ──────────────────────────────────────────── */}
+    <s-page heading="Vaahini Discount App Dashboard" style={styles.page}>
       <s-section heading="System Status">
         <div style={styles.statusGrid}>
           <div style={styles.statusCard}>
-            <div style={styles.statusLabel}>Store</div>
-            <div style={styles.statusValue}>{shop}</div>
+            <div style={styles.statusLabel}>Mode</div>
+            <div style={styles.statusValue}>Serverless & Databaseless</div>
           </div>
           <div
             style={{
               ...styles.statusCard,
-              borderColor: dbHealthy ? "#86efac" : "#fca5a5",
-              background: dbHealthy ? "#f0fdf4" : "#fef2f2",
+              borderColor: tokenConfigured ? "#86efac" : "#fca5a5",
+              background: tokenConfigured ? "#f0fdf4" : "#fef2f2",
             }}
           >
-            <div style={styles.statusLabel}>Database</div>
+            <div style={styles.statusLabel}>Shopify API Token</div>
             <div style={styles.statusValue}>
               <span
                 style={{
                   ...styles.badge,
-                  ...(dbHealthy ? styles.badgeGreen : styles.badgeRed),
+                  ...(tokenConfigured ? styles.badgeGreen : styles.badgeRed),
                 }}
               >
-                {dbHealthy ? "● Healthy" : "● Error"}
+                {tokenConfigured ? "● Configured" : "● Missing Token"}
               </span>
             </div>
           </div>
           <div style={styles.statusCard}>
-            <div style={styles.statusLabel}>Sessions</div>
-            <div style={styles.statusValue}>
-              {offlineSessionsCount} active
-            </div>
+            <div style={styles.statusLabel}>App Host URL</div>
+            <div style={styles.statusValue}>{appUrl}</div>
           </div>
           <div style={styles.statusCard}>
             <div style={styles.statusLabel}>Active Rules</div>
             <div style={styles.statusValue}>
-              <span style={styles.dealBadge}>3 Bundle Tiers</span>
+              <span style={styles.dealBadge}>B1G1 + Groups of 3/4</span>
             </div>
           </div>
         </div>
       </s-section>
 
-      {/* ──── 2. Recent Draft Orders ────────────────────────────────────── */}
-      <s-section heading="Recent Draft Orders">
-        <div style={styles.sectionCard}>
-          {recentDraftOrders.length === 0 ? (
-            <div
-              style={{ fontSize: "13px", color: "#6b7280", padding: "12px 0" }}
-            >
-              No open draft orders found.
-            </div>
-          ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Order</th>
-                  <th style={{ ...styles.th, textAlign: "right" }}>Subtotal</th>
-                  <th style={{ ...styles.th, textAlign: "right" }}>Total</th>
-                  <th style={{ ...styles.th, textAlign: "right" }}>
-                    Discount
-                  </th>
-                  <th style={{ ...styles.th, textAlign: "center" }}>Status</th>
-                  <th style={{ ...styles.th, textAlign: "right" }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentDraftOrders.map((order) => (
-                  <tr key={order.id}>
-                    <td style={styles.td}>
-                      <strong>{order.name}</strong>
-                      <div
-                        style={{
-                          fontSize: "11px",
-                          color: "#9ca3af",
-                          marginTop: "2px",
-                        }}
-                      >
-                        {new Date(order.createdAt).toLocaleString()}
-                      </div>
-                    </td>
-                    <td style={styles.tdRight}>
-                      ₹{order.subtotal.toFixed(2)}
-                    </td>
-                    <td style={{ ...styles.tdRight, fontWeight: "600" }}>
-                      ₹{order.total.toFixed(2)}
-                    </td>
-                    <td style={{ ...styles.tdRight, color: "#dc2626" }}>
-                      {order.subtotal > order.total
-                        ? `-₹${(order.subtotal - order.total).toFixed(2)}`
-                        : "—"}
-                    </td>
-                    <td style={{ ...styles.td, textAlign: "center" }}>
-                      <span style={{ ...styles.badge, ...styles.badgeGreen }}>
-                        {order.status}
-                      </span>
-                    </td>
-                    <td style={{ ...styles.td, textAlign: "right" }}>
-                      {order.invoiceUrl && (
-                        <button
-                          onClick={() =>
-                            window.open(order.invoiceUrl, "_blank")
-                          }
-                          style={{
-                            ...styles.linkButton,
-                            fontSize: "11px",
-                            padding: "4px 10px",
-                          }}
-                        >
-                          Invoice ↗
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      <s-section heading="Integration Status">
+        <div style={styles.infoPanel}>
+          <h3 style={{ fontSize: "14px", fontWeight: "600", color: "#111827", margin: 0 }}>
+            Headless Discount Code Microservice
+          </h3>
+          <p style={styles.paragraph}>
+            This application is running in stateless serverless mode. All dynamic discount calculations
+            and single-use coupons are generated directly via Shopify's GraphQL API using the permanent Admin API access token.
+          </p>
+          <p style={styles.paragraph}>
+            <strong>Storefront hook:</strong> The theme's cart template intercepts the checkout button and communicates directly with the <code>/api/discount</code> endpoint.
+          </p>
         </div>
       </s-section>
     </s-page>
