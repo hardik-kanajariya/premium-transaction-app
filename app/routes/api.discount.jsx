@@ -289,10 +289,15 @@ export const action = async ({ request }) => {
           basicCodeDiscount: {
             title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
             code: discountCode,
-            startsAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10 minutes in the past to neutralize clock drift / sync latency
-            endsAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes expiration
+            startsAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+            endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
             usageLimit: 1,
-            appliesOncePerCustomer: true,
+            appliesOncePerCustomer: false,
+            combinesWith: {
+              orderDiscounts: true,
+              productDiscounts: true,
+              shippingDiscounts: true
+            },
             customerSelection: {
               all: true
             },
