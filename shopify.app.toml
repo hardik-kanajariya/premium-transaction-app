@@ -1,12 +1,9 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "b0c8fde9d4a46a7afca1e8c460c8e005"
-name = "premium-transaction-app"
 application_url = "https://premium-transaction-app.vercel.app"
 embedded = true
-
-[build]
-automatically_update_urls_on_dev = true
+name = "premium-transaction-app"
 
 [webhooks]
 api_version = "2026-07"
@@ -21,7 +18,7 @@ api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_orders,read_products,write_draft_orders,write_discounts"
+scopes = "read_customers,read_orders,read_products,write_discounts,write_draft_orders"
 
 [auth]
 redirect_urls = [ "https://premium-transaction-app.vercel.app/auth/callback" ]
