@@ -13,6 +13,9 @@ node_modules
 /prisma/dev.sqlite-journal
 database.sqlite
 
+# Prisma generated client (regenerated at build time)
+/node_modules/.prisma
+
 .env
 .env.*
 

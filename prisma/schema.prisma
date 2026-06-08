@@ -1,0 +1,35 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// Single-store Shopify OAuth token record.
+/// Only one row expected (for the configured SHOPIFY_STORE_DOMAIN).
+model ShopToken {
+  id                    Int       @id @default(autoincrement())
+  shopDomain            String    @unique @map("shop_domain")
+  accessToken           String    @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  installedAt           DateTime  @default(now()) @map("installed_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("shop_tokens")
+}
+
+/// Temporary nonce storage for OAuth state parameter (CSRF protection).
+/// Rows are cleaned up after use or expire naturally.
+model OAuthState {
+  id        Int      @id @default(autoincrement())
+  nonce     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("oauth_states")
+}

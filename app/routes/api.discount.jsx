@@ -1,6 +1,7 @@
 import { calculatePricing } from "../services/pricing.server";
 import { validateDraftOrderInput, formatError } from "../services/validation.server";
 import { corsJsonResponse, handlePreflight } from "../utils/cors";
+import { getValidShopifyAccessToken } from "../services/shopify-token.server";
 
 /**
  * Queries the last 100 code discount nodes in the Shopify store,
@@ -132,9 +133,12 @@ export const action = async ({ request }) => {
         return corsJsonResponse(formatError("Missing required parameters: 'shop' and 'code'", 400), request, { status: 400 });
       }
 
-      const token = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
-      if (!token) {
-        return corsJsonResponse(formatError("Shopify API Token not configured", 500), request, { status: 500 });
+      let token;
+      try {
+        token = await getValidShopifyAccessToken();
+      } catch (err) {
+        console.error("[Vaahini] Token service error:", err.message);
+        return corsJsonResponse(formatError(err.message, 500), request, { status: 500 });
       }
 
       // 1. Get the Discount Node ID from the code string
@@ -235,11 +239,13 @@ export const action = async ({ request }) => {
     const discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf4.count > 0 ? "B4-" : "B1G1-"}${uniqueId}`;
 
     // 3. Resolve Shopify Admin API token
-    const token = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
-    if (!token) {
-      console.error("[Vaahini] SHOPIFY_ADMIN_API_ACCESS_TOKEN is not configured in .env.");
+    let token;
+    try {
+      token = await getValidShopifyAccessToken();
+    } catch (err) {
+      console.error("[Vaahini] Token service error:", err.message);
       return corsJsonResponse(
-        formatError("Shopify API Token not configured", 500),
+        formatError(err.message, 500),
         request,
         { status: 500 }
       );
