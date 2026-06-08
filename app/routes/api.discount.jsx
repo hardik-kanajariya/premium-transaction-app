@@ -105,8 +105,11 @@ async function cleanupExpiredDiscounts(shop, token) {
   }
 }
 
-export const loader = async () => {
-  return new Response("Method not allowed", { status: 405 });
+export const loader = async ({ request }) => {
+  const preflightResponse = handlePreflight(request);
+  if (preflightResponse) return preflightResponse;
+
+  return corsJsonResponse(formatError("Method not allowed", 405), request, { status: 405 });
 };
 
 export const action = async ({ request }) => {
