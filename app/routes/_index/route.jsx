@@ -18,7 +18,7 @@ export const loader = async () => {
     where: { shopDomain },
     select: {
       shopDomain: true,
-      createdAt: true,
+      installedAt: true,
       updatedAt: true,
       accessTokenExpiresAt: true,
       refreshTokenExpiresAt: true,
@@ -32,7 +32,7 @@ export const loader = async () => {
     shopToken: shopToken
       ? {
           shopDomain: shopToken.shopDomain,
-          createdAt: shopToken.createdAt.toISOString(),
+          installedAt: shopToken.installedAt.toISOString(),
           updatedAt: shopToken.updatedAt.toISOString(),
           accessTokenExpiresAt: shopToken.accessTokenExpiresAt
             ? shopToken.accessTokenExpiresAt.toISOString()
