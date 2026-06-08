@@ -289,7 +289,7 @@ export const action = async ({ request }) => {
           basicCodeDiscount: {
             title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
             code: discountCode,
-            startsAt: new Date().toISOString(),
+            startsAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10 minutes in the past to neutralize clock drift / sync latency
             endsAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes expiration
             usageLimit: 1,
             appliesOncePerCustomer: true,
