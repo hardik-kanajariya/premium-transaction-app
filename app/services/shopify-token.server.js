@@ -52,9 +52,6 @@ export async function getValidShopifyAccessToken() {
   }
 
   // Token expired or near expiry — attempt refresh
-  console.log(
-    `[Vaahini] Access token for ${SHOPIFY_STORE_DOMAIN} is near expiry. Refreshing...`
-  );
 
   if (!record.refreshToken) {
     const installUrl = `${SHOPIFY_APP_URL || ""}/auth/install?shop=${SHOPIFY_STORE_DOMAIN}`;
@@ -141,10 +138,6 @@ async function refreshAndPersistToken(record) {
     where: { shopDomain: record.shopDomain },
     data: updateData,
   });
-
-  console.log(
-    `[Vaahini] Successfully refreshed token for ${record.shopDomain}`
-  );
 
   return data.access_token;
 }

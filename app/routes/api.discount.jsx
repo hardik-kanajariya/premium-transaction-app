@@ -58,11 +58,8 @@ async function cleanupExpiredDiscounts(shop, token) {
     }
 
     if (expiredIds.length === 0) {
-      console.log("[Vaahini] No expired discount codes to clean up.");
       return;
     }
-
-    console.log(`[Vaahini] Found ${expiredIds.length} expired discount codes. Deleting...`);
 
     const deleteMutation = `
       mutation apiDiscountCodeDelete($id: ID!) {
@@ -91,10 +88,7 @@ async function cleanupExpiredDiscounts(shop, token) {
           })
         });
         if (delRes.ok) {
-          const delJson = await delRes.json();
-          if (delJson.data?.discountCodeDelete?.deletedDiscountCodeId) {
-            console.log(`[Vaahini] Successfully deleted expired discount code: ${id}`);
-          }
+          await delRes.json();
         }
       } catch (err) {
         console.error(`[Vaahini] Failed to delete discount code ${id}:`, err);
@@ -215,7 +209,6 @@ export const action = async ({ request }) => {
         );
       }
 
-      console.log(`[Vaahini] Immediately deleted cancelled/failed discount code: ${code} (${id})`);
       return corsJsonResponse({ success: true, deletedCode: code }, request);
     }
 

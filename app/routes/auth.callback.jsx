@@ -131,8 +131,6 @@ export const loader = async ({ request }) => {
     update: upsertData,
   });
 
-  console.log(`[Vaahini] Successfully installed/reauthorized app for ${shop}`);
-
   // ── 7. Return success page ─────────────────────────────────────────────────
   return new Response(
     `<!DOCTYPE html>
