@@ -355,7 +355,7 @@ export const action = async ({ request }) => {
         })) : []
       })),
       note: note || "Created by Vaahini Discount Gateway",
-      noteAttributes: noteAttributes ? noteAttributes.map(attr => ({
+      customAttributes: noteAttributes ? noteAttributes.map(attr => ({
         key: attr.key || attr.name,
         value: String(attr.value)
       })) : []
