@@ -219,22 +219,13 @@ export const action = async ({ request }) => {
       return corsJsonResponse(formatError(validation.error, 400), request, { status: 400 });
     }
 
-    const { shop, items } = validation.cleanData;
+    const { shop, items, customer, shippingAddress, billingAddress, note, noteAttributes } = validation.cleanData;
 
     // 1. Calculate the discount amount
     const pricing = calculatePricing(items);
     const discountAmount = pricing.discountAmount;
 
-    // If there is no discount, return success with no code
-    if (discountAmount <= 0) {
-      return corsJsonResponse({ success: true, code: null, discountAmount: 0 }, request);
-    }
-
-    // 2. Generate a unique discount code
-    const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf4.count > 0 ? "B4-" : "B1G1-"}${uniqueId}`;
-
-    // 3. Resolve Shopify Admin API token
+    // 2. Resolve Shopify Admin API token
     let token;
     try {
       token = await getValidShopifyAccessToken();
@@ -247,19 +238,175 @@ export const action = async ({ request }) => {
       );
     }
 
-    // Run cleanup of expired Vaahini codes asynchronously with 10% probability to reduce Serverless API load and improve response latency
-    if (Math.random() < 0.1) {
-      cleanupExpiredDiscounts(shop, token).catch((err) =>
-        console.error("[Vaahini] Background cleanup error:", err)
-      );
+    let discountCode = null;
+    let discountNodeId = null;
+
+    // 3. Create the discount code in Shopify via GraphQL directly (if discount amount > 0)
+    if (discountAmount > 0) {
+      // Generate a unique discount code
+      const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
+      discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf4.count > 0 ? "B4-" : "B1G1-"}${uniqueId}`;
+
+      // Run cleanup of expired Vaahini codes asynchronously with 10% probability
+      if (Math.random() < 0.1) {
+        cleanupExpiredDiscounts(shop, token).catch((err) =>
+          console.error("[Vaahini] Background cleanup error:", err)
+        );
+      }
+
+      const mutation = `
+        mutation apiDiscountCodeCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+          discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+            codeDiscountNode {
+              id
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `;
+
+      const graphQLUrl = `https://${shop}/admin/api/2026-07/graphql.json`;
+      const response = await fetch(graphQLUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": token
+        },
+        body: JSON.stringify({
+          query: mutation,
+          variables: {
+            basicCodeDiscount: {
+              title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
+              code: discountCode,
+              startsAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+              endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+              usageLimit: 1,
+              appliesOncePerCustomer: false,
+              combinesWith: {
+                orderDiscounts: true,
+                productDiscounts: true,
+                shippingDiscounts: true
+              },
+              customerSelection: {
+                all: true
+              },
+              customerGets: {
+                value: {
+                  discountAmount: {
+                    amount: discountAmount.toFixed(2),
+                    appliesOnEachItem: false
+                  }
+                },
+                items: {
+                  all: true
+                }
+              }
+            }
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("[Vaahini] Shopify Discount API HTTP error:", response.status, errorText);
+        return corsJsonResponse(
+          formatError(`Shopify API responded with status ${response.status}`, 400),
+          request,
+          { status: 400 }
+        );
+      }
+
+      const responseJson = await response.json();
+
+      if (responseJson.errors) {
+        console.error("Shopify GraphQL Discount error:", responseJson.errors);
+        return corsJsonResponse(
+          formatError("Shopify GraphQL Error creating discount", 400, responseJson.errors),
+          request,
+          { status: 400 }
+        );
+      }
+
+      const { codeDiscountNode, userErrors } = responseJson.data.discountCodeBasicCreate;
+
+      if (userErrors && userErrors.length > 0) {
+        console.error("Shopify User Discount error:", userErrors);
+        return corsJsonResponse(
+          formatError("Shopify User Error creating discount", 400, userErrors),
+          request,
+          { status: 400 }
+        );
+      }
+
+      discountNodeId = codeDiscountNode.id;
     }
 
-    // 4. Create the discount code in Shopify via GraphQL directly
-    const mutation = `
-      mutation apiDiscountCodeCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
-        discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
-          codeDiscountNode {
+    // 4. Construct Draft Order payload
+    const draftOrderInput = {
+      lineItems: items.map(item => ({
+        variantId: item.variantId,
+        quantity: item.quantity,
+        customAttributes: item.attributes ? item.attributes.map(attr => ({
+          key: attr.key || attr.name,
+          value: String(attr.value)
+        })) : []
+      })),
+      note: note || "Created by Vaahini Discount Gateway",
+      noteAttributes: noteAttributes ? noteAttributes.map(attr => ({
+        key: attr.key || attr.name,
+        value: String(attr.value)
+      })) : []
+    };
+
+    if (discountCode) {
+      draftOrderInput.discountCodes = [discountCode];
+    }
+
+    if (customer) {
+      draftOrderInput.customer = {};
+      if (customer.email) {
+        draftOrderInput.customer.email = customer.email;
+      }
+    }
+
+    if (shippingAddress) {
+      draftOrderInput.shippingAddress = {
+        address1: shippingAddress.address1,
+        address2: shippingAddress.address2,
+        city: shippingAddress.city,
+        province: shippingAddress.province,
+        country: shippingAddress.country,
+        zip: shippingAddress.zip,
+        firstName: shippingAddress.firstName,
+        lastName: shippingAddress.lastName,
+        phone: shippingAddress.phone
+      };
+    }
+
+    if (billingAddress) {
+      draftOrderInput.billingAddress = {
+        address1: billingAddress.address1,
+        address2: billingAddress.address2,
+        city: billingAddress.city,
+        province: billingAddress.province,
+        country: billingAddress.country,
+        zip: billingAddress.zip,
+        firstName: billingAddress.firstName,
+        lastName: billingAddress.lastName,
+        phone: billingAddress.phone
+      };
+    }
+
+    // 5. Create Draft Order via GraphQL
+    const draftOrderMutation = `
+      mutation apiDraftOrderCreate($input: DraftOrderInput!) {
+        draftOrderCreate(input: $input) {
+          draftOrder {
             id
+            invoiceUrl
           }
           userErrors {
             field
@@ -270,73 +417,47 @@ export const action = async ({ request }) => {
     `;
 
     const graphQLUrl = `https://${shop}/admin/api/2026-07/graphql.json`;
-    const response = await fetch(graphQLUrl, {
+    const draftOrderResponse = await fetch(graphQLUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Shopify-Access-Token": token
       },
       body: JSON.stringify({
-        query: mutation,
+        query: draftOrderMutation,
         variables: {
-          basicCodeDiscount: {
-            title: `Vaahini Bundle: ${pricing.pricingBreakdown.activeDealName || "Discount"}`,
-            code: discountCode,
-            startsAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-            endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-            usageLimit: 1,
-            appliesOncePerCustomer: false,
-            combinesWith: {
-              orderDiscounts: true,
-              productDiscounts: true,
-              shippingDiscounts: true
-            },
-            customerSelection: {
-              all: true
-            },
-            customerGets: {
-              value: {
-                discountAmount: {
-                  amount: discountAmount.toFixed(2),
-                  appliesOnEachItem: false
-                }
-              },
-              items: {
-                all: true
-              }
-            }
-          }
+          input: draftOrderInput
         }
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("[Vaahini] Shopify API HTTP error:", response.status, errorText);
+    if (!draftOrderResponse.ok) {
+      const errorText = await draftOrderResponse.text();
+      console.error("[Vaahini] Shopify Draft Order API HTTP error:", draftOrderResponse.status, errorText);
       return corsJsonResponse(
-        formatError(`Shopify API responded with status ${response.status}`, 400),
+        formatError(`Shopify Draft Order API responded with status ${draftOrderResponse.status}`, 400),
         request,
         { status: 400 }
       );
     }
 
-    const responseJson = await response.json();
+    const draftOrderJson = await draftOrderResponse.json();
 
-    if (responseJson.errors) {
-      console.error("Shopify GraphQL Discount error:", responseJson.errors);
+    if (draftOrderJson.errors) {
+      console.error("Shopify GraphQL Draft Order error:", draftOrderJson.errors);
       return corsJsonResponse(
-        formatError("Shopify GraphQL Error creating discount", 400, responseJson.errors),
+        formatError("Shopify GraphQL Error creating Draft Order", 400, draftOrderJson.errors),
         request,
         { status: 400 }
       );
     }
 
-    const { codeDiscountNode, userErrors } = responseJson.data.discountCodeBasicCreate;
+    const { draftOrder, userErrors: draftOrderUserErrors } = draftOrderJson.data.draftOrderCreate;
 
-    if (userErrors && userErrors.length > 0) {
-      console.error("Shopify User Discount error:", userErrors);
+    if (draftOrderUserErrors && draftOrderUserErrors.length > 0) {
+      console.error("Shopify User Draft Order error:", draftOrderUserErrors);
       return corsJsonResponse(
-        formatError("Shopify User Error creating discount", 400, userErrors),
+        formatError("Shopify User Error creating Draft Order", 400, draftOrderUserErrors),
         request,
         { status: 400 }
       );
@@ -346,7 +467,9 @@ export const action = async ({ request }) => {
       success: true,
       code: discountCode,
       discountAmount,
-      ruleId: codeDiscountNode.id
+      ruleId: discountNodeId,
+      draftOrderId: draftOrder.id,
+      invoiceUrl: draftOrder.invoiceUrl
     }, request);
 
   } catch (error) {
