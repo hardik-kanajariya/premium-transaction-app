@@ -1,18 +1,19 @@
 /**
  * Vaahini Bundle Engine — Backend Pricing Calculator
  *
- * Implements the exact algorithm from bundle-engine-spec.md:
+ * Implements the bundle pricing algorithm:
  *   1. Flatten cart items into individual units
  *   2. Sort ascending by price (cheapest first)
- *   3. Partition: cheapest R items → remainder tier, most expensive 4×G items → group-of-4 tier
+ *   3. Partition: cheapest R items → remainder tier, most expensive 5×G items → group-of-5 tier
  *   4. Calculate discounts per tier with pro-rata allocation and rounding reconciliation
  *
  * All internal math is done in paise (integer) to avoid floating-point drift.
  */
 
 // ─── Bundle Price Constants (paise) ───────────────────────────────────────────
-const GROUP_OF_4_PRICE_PAISE = 159900; // ₹1,599.00
-const GROUP_OF_3_PRICE_PAISE = 129900; // ₹1,299.00
+const GROUP_OF_5_PRICE_PAISE = 159900; // ₹1,599.00
+const GROUP_OF_4_PRICE_PAISE = 129900; // ₹1,299.00
+const GROUP_OF_3_PRICE_PAISE = 99900;  // ₹999.00
 
 /**
  * Normalizes a price input (string or number, rupees or paise) to integer paise.
@@ -52,7 +53,7 @@ function paiseToRupees(paise) {
 
 /**
  * Allocates a total discount proportionally across items, with rounding reconciliation
- * on the final item to prevent penny discrepancies (per bundle-engine-spec.md §2).
+ * on the final item to prevent penny discrepancies.
  *
  * @param {Array<{pricePaise: number}>} items — the flat item instances in this group
  * @param {number} totalDiscountPaise — total discount to distribute
@@ -95,6 +96,7 @@ function allocateDiscountProRata(items, totalDiscountPaise, groupSumPaise) {
  *   discountAmount: number,
  *   finalTotal: number,
  *   pricingBreakdown: {
+ *     groupsOf5: { count: number, discount: number, targetPrice: number },
  *     groupsOf4: { count: number, discount: number, targetPrice: number },
  *     groupsOf3: { count: number, discount: number, targetPrice: number },
  *     b1g1:      { count: number, discount: number },
@@ -130,10 +132,10 @@ export function calculatePricing(items, currency = "INR") {
   flatItemInstances.sort((a, b) => a.pricePaise - b.pricePaise);
 
   const N = flatItemInstances.length;
-  const G = Math.floor(N / 4);
-  const R = N % 4;
+  const G = Math.floor(N / 5);
+  const R = N % 5;
 
-  // ── Step 3a: Groups of 4 — most expensive 4×G items ──────────────────────
+  // ── Step 3a: Groups of 5 — most expensive 5×G items ──────────────────────
   let groupDiscountPaise = 0;
   let groupSumPaise = 0;
 
@@ -146,7 +148,7 @@ export function calculatePricing(items, currency = "INR") {
       groupSumPaise += inst.pricePaise;
     }
 
-    const targetGroupPrice = G * GROUP_OF_4_PRICE_PAISE;
+    const targetGroupPrice = G * GROUP_OF_5_PRICE_PAISE;
     if (groupSumPaise > targetGroupPrice) {
       groupDiscountPaise = groupSumPaise - targetGroupPrice;
       allocateDiscountProRata(groupItems, groupDiscountPaise, groupSumPaise);
@@ -168,6 +170,15 @@ export function calculatePricing(items, currency = "INR") {
     }
     if (remSumPaise > GROUP_OF_3_PRICE_PAISE) {
       remDiscountPaise = remSumPaise - GROUP_OF_3_PRICE_PAISE;
+      allocateDiscountProRata(remItems, remDiscountPaise, remSumPaise);
+    }
+  } else if (R === 4) {
+    const remItems = flatItemInstances.slice(0, 4);
+    for (const inst of remItems) {
+      remSumPaise += inst.pricePaise;
+    }
+    if (remSumPaise > GROUP_OF_4_PRICE_PAISE) {
+      remDiscountPaise = remSumPaise - GROUP_OF_4_PRICE_PAISE;
       allocateDiscountProRata(remItems, remDiscountPaise, remSumPaise);
     }
   }
@@ -205,10 +216,12 @@ export function calculatePricing(items, currency = "INR") {
   // ── Step 5: Build human-readable deal name ────────────────────────────────
   const dealParts = [];
   if (G > 0) {
-    dealParts.push(`${G}x 4@₹1,599`);
+    dealParts.push(`${G}x 5@₹1,599`);
   }
-  if (R === 3) {
-    dealParts.push("3@₹1,299");
+  if (R === 4) {
+    dealParts.push("4@₹1,299");
+  } else if (R === 3) {
+    dealParts.push("3@₹999");
   } else if (R === 2) {
     dealParts.push("B1G1");
   }
@@ -224,15 +237,20 @@ export function calculatePricing(items, currency = "INR") {
     discountAmount: paiseToRupees(totalDiscountPaise),
     finalTotal: paiseToRupees(originalSubtotalPaise - totalDiscountPaise),
     pricingBreakdown: {
-      groupsOf4: {
+      groupsOf5: {
         count: G,
         discount: paiseToRupees(groupDiscountPaise),
-        targetPrice: paiseToRupees(G * GROUP_OF_4_PRICE_PAISE),
+        targetPrice: paiseToRupees(G * GROUP_OF_5_PRICE_PAISE),
+      },
+      groupsOf4: {
+        count: R === 4 ? 1 : 0,
+        discount: R === 4 ? paiseToRupees(remDiscountPaise) : 0.0,
+        targetPrice: R === 4 ? 1299.0 : 0.0,
       },
       groupsOf3: {
         count: R === 3 ? 1 : 0,
-        discount: paiseToRupees(remDiscountPaise),
-        targetPrice: R === 3 ? 1299.0 : 0.0,
+        discount: R === 3 ? paiseToRupees(remDiscountPaise) : 0.0,
+        targetPrice: R === 3 ? 999.0 : 0.0,
       },
       b1g1: {
         count: R === 2 ? 1 : 0,

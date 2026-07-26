@@ -245,7 +245,7 @@ export const action = async ({ request }) => {
     if (discountAmount > 0) {
       // Generate a unique discount code
       const uniqueId = Math.random().toString(36).substring(2, 8).toUpperCase();
-      discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf4.count > 0 ? "B4-" : "B1G1-"}${uniqueId}`;
+      discountCode = `VAAHINI-${pricing.pricingBreakdown.groupsOf5.count > 0 ? "B5-" : "B1G1-"}${uniqueId}`;
 
       // Run cleanup of expired Vaahini codes asynchronously with 10% probability
       if (Math.random() < 0.1) {
