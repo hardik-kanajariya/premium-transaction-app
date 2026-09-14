@@ -114,6 +114,10 @@ export function calculatePricing(items, currency = "INR") {
     const qty = parseInt(item.quantity, 10) || 0;
     const pricePaise = normalizeToPaise(item.price);
     originalSubtotalPaise += pricePaise * qty;
+    const isWaistChain = Boolean(
+      item.isWaistChain ||
+      (item.title && /waist\s*chain/i.test(item.title))
+    );
 
     for (let i = 0; i < qty; i++) {
       flatItemInstances.push({
@@ -122,27 +126,39 @@ export function calculatePricing(items, currency = "INR") {
         variantId: item.variantId || null,
         title: item.title || "Custom Product",
         pricePaise,
+        isWaistChain,
         attributes: item.attributes || [],
         discountPaise: 0,
       });
     }
   });
 
-  // ── Step 2: Sort ascending by price (cheapest first) ─────────────────────
-  flatItemInstances.sort((a, b) => a.pricePaise - b.pricePaise);
+  const waistChainInstances = flatItemInstances.filter((inst) => inst.isWaistChain);
+  const regularInstances = flatItemInstances.filter((inst) => !inst.isWaistChain);
 
-  const N = flatItemInstances.length;
+  // ── Step 2a: Waist Chain B1G1 Pricing (exclusive offer) ────────────────────
+  waistChainInstances.sort((a, b) => a.pricePaise - b.pricePaise);
+  const numWaistPairs = Math.floor(waistChainInstances.length / 2);
+  let waistChainDiscountPaise = 0;
+  for (let i = 0; i < numWaistPairs; i++) {
+    waistChainInstances[i].discountPaise = waistChainInstances[i].pricePaise;
+    waistChainDiscountPaise += waistChainInstances[i].pricePaise;
+  }
+
+  // ── Step 2b: Regular Items Tiered Bundles ──────────────────────────────────
+  regularInstances.sort((a, b) => a.pricePaise - b.pricePaise);
+
+  const N = regularInstances.length;
   const G = Math.floor(N / 5);
   const R = N % 5;
 
-  // ── Step 3a: Groups of 5 — most expensive 5×G items ──────────────────────
   let groupDiscountPaise = 0;
   let groupSumPaise = 0;
 
   if (G > 0) {
     const groupStartIdx = R;
     const groupEndIdx = N - 1;
-    const groupItems = flatItemInstances.slice(groupStartIdx, groupEndIdx + 1);
+    const groupItems = regularInstances.slice(groupStartIdx, groupEndIdx + 1);
 
     for (const inst of groupItems) {
       groupSumPaise += inst.pricePaise;
@@ -155,16 +171,14 @@ export function calculatePricing(items, currency = "INR") {
     }
   }
 
-  // ── Step 3b: Remainder — cheapest R items ────────────────────────────────
   let remDiscountPaise = 0;
   let remSumPaise = 0;
 
   if (R === 2) {
-    // B1G1: the cheaper of the two is free (index 0 after ascending sort)
-    remDiscountPaise = flatItemInstances[0].pricePaise;
-    flatItemInstances[0].discountPaise = remDiscountPaise;
+    remDiscountPaise = regularInstances[0].pricePaise;
+    regularInstances[0].discountPaise = remDiscountPaise;
   } else if (R === 3) {
-    const remItems = flatItemInstances.slice(0, 3);
+    const remItems = regularInstances.slice(0, 3);
     for (const inst of remItems) {
       remSumPaise += inst.pricePaise;
     }
@@ -173,7 +187,7 @@ export function calculatePricing(items, currency = "INR") {
       allocateDiscountProRata(remItems, remDiscountPaise, remSumPaise);
     }
   } else if (R === 4) {
-    const remItems = flatItemInstances.slice(0, 4);
+    const remItems = regularInstances.slice(0, 4);
     for (const inst of remItems) {
       remSumPaise += inst.pricePaise;
     }
@@ -182,11 +196,11 @@ export function calculatePricing(items, currency = "INR") {
       allocateDiscountProRata(remItems, remDiscountPaise, remSumPaise);
     }
   }
-  // R === 1 or R === 0: no remainder discount
 
-  const totalDiscountPaise = groupDiscountPaise + remDiscountPaise;
+  const regularDiscountPaise = groupDiscountPaise + remDiscountPaise;
+  const totalDiscountPaise = waistChainDiscountPaise + regularDiscountPaise;
 
-  // ── Step 4: Re-aggregate flat instances back into original line items ─────
+  // ── Step 3: Re-aggregate flat instances back into original line items ──────
   const normalizedLines = items.map((item, originalIdx) => {
     const instances = flatItemInstances.filter(
       (inst) => inst.originalIdx === originalIdx,
@@ -213,8 +227,11 @@ export function calculatePricing(items, currency = "INR") {
     };
   });
 
-  // ── Step 5: Build human-readable deal name ────────────────────────────────
+  // ── Step 4: Build human-readable deal name ─────────────────────────────────
   const dealParts = [];
+  if (numWaistPairs > 0) {
+    dealParts.push(`Waist Chain B1G1`);
+  }
   if (G > 0) {
     dealParts.push(`${G}x 5@₹1,599`);
   }
@@ -237,6 +254,11 @@ export function calculatePricing(items, currency = "INR") {
     discountAmount: paiseToRupees(totalDiscountPaise),
     finalTotal: paiseToRupees(originalSubtotalPaise - totalDiscountPaise),
     pricingBreakdown: {
+      waistChain: {
+        count: waistChainInstances.length,
+        pairs: numWaistPairs,
+        discount: paiseToRupees(waistChainDiscountPaise),
+      },
       groupsOf5: {
         count: G,
         discount: paiseToRupees(groupDiscountPaise),

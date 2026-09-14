@@ -51,6 +51,7 @@ export function validatePricingPreviewInput(body) {
       title: item.title || "Custom Product",
       price,
       quantity,
+      isWaistChain: Boolean(item.isWaistChain),
       attributes: Array.isArray(item.attributes) ? item.attributes : []
     });
   }
