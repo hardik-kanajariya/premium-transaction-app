@@ -13,7 +13,7 @@
 // ─── Bundle Price Constants (paise) ───────────────────────────────────────────
 const GROUP_OF_5_PRICE_PAISE = 159900; // ₹1,599.00
 const GROUP_OF_4_PRICE_PAISE = 129900; // ₹1,299.00
-const GROUP_OF_3_PRICE_PAISE = 99900;  // ₹999.00
+const GROUP_OF_3_PRICE_PAISE = 89900;  // ₹899.00
 
 /**
  * Normalizes a price input (string or number, rupees or paise) to integer paise.
@@ -238,7 +238,7 @@ export function calculatePricing(items, currency = "INR") {
   if (R === 4) {
     dealParts.push("4@₹1,299");
   } else if (R === 3) {
-    dealParts.push("3@₹999");
+    dealParts.push("3@₹899");
   } else if (R === 2) {
     dealParts.push("B1G1");
   }
@@ -272,7 +272,7 @@ export function calculatePricing(items, currency = "INR") {
       groupsOf3: {
         count: R === 3 ? 1 : 0,
         discount: R === 3 ? paiseToRupees(remDiscountPaise) : 0.0,
-        targetPrice: R === 3 ? 999.0 : 0.0,
+        targetPrice: R === 3 ? paiseToRupees(GROUP_OF_3_PRICE_PAISE) : 0.0,
       },
       b1g1: {
         count: R === 2 ? 1 : 0,
