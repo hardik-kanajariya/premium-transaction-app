@@ -33,7 +33,7 @@ export function validatePricingPreviewInput(body) {
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (typeof item !== "object" || item === null) {
-      return { valid: false, error: `Item at index ${i} is not a valid object.` };
+      continue;
     }
 
     const price = parseFloat(item.price);
@@ -43,7 +43,7 @@ export function validatePricingPreviewInput(body) {
       return { valid: false, error: `Item at index ${i} has an invalid or negative 'price'.` };
     }
     if (isNaN(quantity) || quantity <= 0) {
-      return { valid: false, error: `Item at index ${i} has an invalid or non-positive 'quantity'.` };
+      continue;
     }
 
     cleanItems.push({
@@ -54,6 +54,10 @@ export function validatePricingPreviewInput(body) {
       isWaistChain: Boolean(item.isWaistChain),
       attributes: Array.isArray(item.attributes) ? item.attributes : []
     });
+  }
+
+  if (cleanItems.length === 0) {
+    return { valid: false, error: "No valid items with positive quantity found in cart." };
   }
 
   return {
